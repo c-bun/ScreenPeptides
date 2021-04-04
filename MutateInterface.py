@@ -2,6 +2,7 @@
 # put it all together!!
 
 import pyrosetta.rosetta.protocols as protocols
+import pyrosetta.toolbox
 import random
     
 def interface_res(pose, interface_distance=8, exclude_chain_B=True):
@@ -31,9 +32,9 @@ def choose_AA(aas=["A", "V", "I", "L", "L", "F", "Y", "W", "S", "T", "N", "Q", "
 def point_mutation_and_dock(pose, ndecoys):
     position = random.choice(interface_res(pose))
     aa = choose_AA()
-    toolbox.mutants.mutate_residue(pose, position, aa, pack_radius=8)
+    pyrosetta.toolbox.mutants.mutate_residue(pose, position, aa, pack_radius=8)
     
     pep_run("./decoys/"+str(position)+aa, ndecoys, pose)
     
 def point_mutate(pose, position, aa, pack_radius=8):
-    toolbox.mutants.mutate_residue(pose, position, aa, pack_radius=8)
+    pyrosetta.toolbox.mutants.mutate_residue(pose, position, aa, pack_radius=8)
