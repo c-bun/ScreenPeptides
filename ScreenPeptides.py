@@ -4,8 +4,13 @@ from pyrosetta.rosetta.protocols.flexpep_docking import FlexPepDockingProtocol
 from pyrosetta import PyMOLMover
 from pyrosetta.rosetta import *
 from pyrosetta.toolbox.py_jobdistributor import output_scorefile
+import numpy as np
+import json
+import time
 
-def fp_dock_init():
+import MutateInterface
+
+def fp_dock_init(addl_flags=None):
     """
     Use to init parameters for the flexpep run. The ones below are currently working reasonably. 
     Best guide to the params that I have found is here:
@@ -13,11 +18,13 @@ def fp_dock_init():
     https://new.rosettacommons.org/docs/latest/application_documentation/docking/flex-pep-dock
     
     """
-    opts = "-pep_refine -ex1 -ex2aro -use_input_sc -ignore_unrecognized_res"
+    opts = "-pep_refine -ex1 -ex2aro -use_input_sc -ignore_unrecognized_res -mute all"
+    if addl_flags:
+        opts += " "+addl_flags
     init(opts)
 
 # copied from D090_Ala_scan.py in the example scripts for PyRosetta
-def calc_binding_energy(pose, scorefxn, center, cutoff = 8.0):
+def calc_binding_energy(pose, scorefxn, to_repack, cutoff = 8.0):
     scorefxn = create_score_function(scorefxn)
     
     # create a copy of the pose for manipulation
@@ -39,15 +46,16 @@ def calc_binding_energy(pose, scorefxn, center, cutoff = 8.0):
     #    "On" or "Off" directly, this will create an object for these options
     #    and assign it to the TaskFactory
     prevent_repacking = core.pack.task.operation.PreventRepacking()
-
-    # the "center" (nbr_atom) of the mutant residue, for distance calculation
-    center = test_pose.residue(center).nbr_atom_xyz()
-    for i in range(1, test_pose.total_residue() + 1):
-        # the .distance_squared method is (a little) lighter than .norm
-        # if the residue is further than <cutoff> Angstroms away, do not repack
-        if center.distance_squared(
-                test_pose.residue(i).nbr_atom_xyz()) > cutoff**2:
-            prevent_repacking.include_residue(i)
+    
+    for residue in to_repack:
+        # the "center" (nbr_atom) of the mutant residue, for distance calculation
+        center = test_pose.residue(residue).nbr_atom_xyz()
+        for i in range(1, test_pose.total_residue() + 1):
+            # the .distance_squared method is (a little) lighter than .norm
+            # if the residue is further than <cutoff> Angstroms away, do not repack
+            if center.distance_squared(
+                    test_pose.residue(i).nbr_atom_xyz()) > cutoff**2:
+                prevent_repacking.include_residue(i)
 
     # apply these settings to the TaskFactory
     tf.push_back(prevent_repacking)
@@ -118,14 +126,15 @@ def calc_binding_energy(pose, scorefxn, center, cutoff = 8.0):
     return before - scorefxn(test_pose)
 
 # Also copied from D090_Ala_scan.py in the example scripts for PyRosetta
-def ddG(wt_pose, mut_pose, mutant_position, sf='docking', repack_distance=8, replicate_runs=20):
+def ddG(wt_pose, mut_pose, to_repack, sf='docking', repack_distance=8, replicate_runs=20):
+    
     a = []
     
     for _ in range(replicate_runs):
         wt_score = calc_binding_energy(wt_pose, sf,
-            mutant_position, repack_distance)
+            to_repack, repack_distance)
         mut_score = calc_binding_energy(mut_pose, sf,
-            mutant_position, repack_distance)
+            to_repack, repack_distance)
         #### the method calc_interaction_energy separates an input pose by
         ####    500 Angstroms along the jump defined in a Vector1 of jump numbers
         ####    for movable jumps, a ScoreFunction must also be provided
@@ -135,6 +144,16 @@ def ddG(wt_pose, mut_pose, mutant_position, sf='docking', repack_distance=8, rep
         #mut_score = calc_interaction_energy(mutant, scorefxn, movable_jumps)
         ddg = mut_score - wt_score
         a.append(ddg)
+    
+    return np.mean(a)
+
+def dG(pose, to_repack, sf='docking', repack_distance=8, replicate_runs=10):
+    a = []
+    
+    for _ in range(replicate_runs):
+        mut_score = calc_binding_energy(pose, sf,
+            to_repack, repack_distance)
+        a.append(mut_score)
     
     return np.mean(a)
 
@@ -176,3 +195,31 @@ def pep_multicore_run(input_path, destination_path, filenames, nstructs):
     with Pool() as p:
         work = [(destination_path+filename[:-4]+"-"+timestr+"_"+str(n), nstructs, None, None, pose_from_pdb(input_path+filename), 'score12') for n, filename in enumerate(filenames)]
         p.starmap(pep_run, work)
+        
+def fpdock(pose):
+    fpdock = FlexPepDockingProtocol() # maybe some day I'll figure out how to add a scorefunction flag here??
+    fpdock.apply(pose)
+    
+def add_score(pose, name, score):
+    pose.scores[name] = score
+    
+def dump_scores(pose, path, i):
+    name = pose.pdb_info().name().split('/')[2]
+    fullpath = path+name+"_"+str(i)+".json"
+    with open(fullpath, 'w') as json_file:
+        json.dump(dict(pose.scores), json_file)
+    
+def dock_peptide(pdb_file, dump_path, scorefunction='docking', i='debug'):
+    
+    fp_dock_init("-score:weights "+scorefunction)
+    
+    pose = pose_from_pdb(pdb_file)
+    
+    fpdock(pose)
+    scorefxn = create_score_function(scorefunction)
+    s1 = scorefxn(pose)
+    interface = MutateInterface.interface_res(pose, 0, False) # this will be different when mut has deletions
+    d = dG(pose, interface, sf=scorefunction, replicate_runs=8)
+    s2 = scorefxn(pose)
+    add_score(pose, 'A_B binding energy', d)
+    dump_scores(pose, dump_path, i)   

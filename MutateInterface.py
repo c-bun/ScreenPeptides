@@ -4,12 +4,14 @@
 import pyrosetta.rosetta.protocols as protocols
 import random
     
-def interface_res(pose, interface_distance=8, exclude_chain=True):
-    
+def interface_res(pose, interface_distance=8, exclude_chain_B=True):
+    """
+    Returns a list of ints representing interface residue positions.
+    """
     interface = protocols.interface.select_interface_residues(pose, 'A_B', interface_distance)
     
     if exclude_chain_B:
-        B_chain_start = nbit.chain_end(1)
+        B_chain_start = pose.chain_end(1)
         for i, res in enumerate(interface):
             if i > B_chain_start:
                 interface[i] = 0
@@ -32,3 +34,6 @@ def point_mutation_and_dock(pose, ndecoys):
     toolbox.mutants.mutate_residue(pose, position, aa, pack_radius=8)
     
     pep_run("./decoys/"+str(position)+aa, ndecoys, pose)
+    
+def point_mutate(pose, position, aa, pack_radius=8):
+    toolbox.mutants.mutate_residue(pose, position, aa, pack_radius=8)
